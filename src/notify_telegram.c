@@ -29,30 +29,54 @@
 #include "plugin.h"
 #include "utils/common/common.h"
 
+#include <curl/curl.h>
+#include <yajl/yajl_parse.h>
+
 #define MAXSTRING 1024
 
-static const char *config_keys[] = {"Greeting"};
+static const char *config_keys[] = {"BotToken", "Recipient"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
-static char *greeting;
+static char *bot_token;
+static char **recipients;
+static int recipients_len;
 
-static pthread_mutex_t greeting_lock = PTHREAD_MUTEX_INITIALIZER;
-
-#define DEFAULT_GREETING "This is telegram plugin!"
+static pthread_mutex_t telegram_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int notify_telegram_init(void) {
+    curl_global_init(CURL_GLOBAL_SSL);
     return 0;
 }
 
 static int notify_telegram_shutdown(void) {
+    curl_global_cleanup();
     return 0;
 }
 
 static int notify_telegram_config(const char *key, const char *value) {
-    if (0 == strcasecmp(key, "Greeting")) {
-        sfree(greeting);
-        greeting = strdup(value);
+    if (strcasecmp(key, "Recipient") == 0) {
+        char **tmp;
+        tmp = realloc(recipients, (recipients_len + 1) * sizeof(char *));
+        if (tmp == NULL) {
+            ERROR("notify_telegram: realloc failed.");
+            return -1;
+        }
+        recipients = tmp;
+        recipients[recipients_len] = strdup(value);
+        if (recipients[recipients_len] == NULL) {
+            ERROR("notify_telegram: strdup failed.");
+            return -1;
+        }
+        recipients_len++;
+    } else if (strcasecmp(key, "BotToken") == 0) {
+        sfree(bot_token);
+        bot_token = strdup(value);
+        if (bot_token == NULL) {
+            ERROR("notify_telegram: strdup failed.");
+            return -1;
+        }
     } else {
+        ERROR("notify_telegram: unknown config key.");
         return -1;
     }
     return 0;
@@ -96,12 +120,22 @@ static int notify_telegram_notification(const notification_t *n, user_data_t __a
 
     buf[sizeof(buf) - 1] = '\0';
 
-    pthread_mutex_lock(&greeting_lock);
+    pthread_mutex_lock(&telegram_lock);
 
-    fprintf(stdout, "%s %s\n", greeting, buf);
+    fprintf(stdout, "%s\n", buf);
     fflush(stdout);
 
-    pthread_mutex_unlock(&greeting_lock);
+    CURL *handle = curl_easy_init();
+    char params[MAXSTRING * 2] = "";
+    char url[MAXSTRING] = "";
+    snprintf(params, MAXSTRING * 2, "chat_id=123123123&text=%s", buf);
+    snprintf(url, MAXSTRING, "https://api.telegram.org/bot%s/sendMessage", bot_token);
+    curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
+    curl_easy_setopt(handle, CURLOPT_URL, url);
+    curl_easy_perform(handle);
+    curl_easy_cleanup(handle);
+
+    pthread_mutex_unlock(&telegram_lock);
 
     return 0;
 }

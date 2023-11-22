@@ -6772,6 +6772,7 @@ plugin_mmc="no"
 plugin_multimeter="no"
 plugin_netstat_udp="no"
 plugin_nfs="no"
+plugin_notify_telegram="no"
 plugin_numa="no"
 plugin_ovs_events="no"
 plugin_ovs_stats="no"
@@ -6982,6 +6983,10 @@ fi
 
 if test "x$with_libcurl" = "xyes" && test "x$with_libxml2" = "xyes"; then
   plugin_curl_xml="yes"
+fi
+
+if test "x$with_libcurl" = "xyes" && test "x$with_libssl" = "xyes" && test "x$with_libyajl" = "xyes"; then
+  plugin_notify_telegram="yes"
 fi
 
 if test "x$with_libyajl" = "xyes"; then
@@ -7275,7 +7280,7 @@ AC_PLUGIN([nginx],               [$with_libcurl],             [nginx statistics]
 AC_PLUGIN([notify_desktop],      [$with_libnotify],           [Desktop notifications])
 AC_PLUGIN([notify_email],        [$with_libesmtp],            [Email notifier])
 AC_PLUGIN([notify_nagios],       [yes],                       [Nagios notification plugin])
-AC_PLUGIN([notify_telegram],     [yes],                       [Telegram notifier])
+AC_PLUGIN([notify_telegram],     [$plugin_notify_telegram],   [Telegram notifier])
 AC_PLUGIN([ntpd],                [yes],                       [NTPd statistics])
 AC_PLUGIN([numa],                [$plugin_numa],              [NUMA virtual memory statistics])
 AC_PLUGIN([nut],                 [$with_libupsclient],        [Network UPS tools statistics])

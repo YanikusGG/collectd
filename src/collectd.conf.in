@@ -1267,7 +1267,9 @@
 #</Plugin>
 
 #<Plugin notify_telegram>
-#	Greeting "This is telegram plugin!"
+#	BotToken "telegram-bot-token"
+#	Recipient "some-telegram-username-1"
+#	Recipient "some-telegram-username-2"
 #</Plugin>
 
 #<Plugin ntpd>

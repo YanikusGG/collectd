@@ -1268,8 +1268,8 @@
 
 #<Plugin notify_telegram>
 #	BotToken "telegram-bot-token"
-#	Recipient "some-telegram-username-1"
-#	Recipient "some-telegram-username-2"
+#	RecipientChatID "123123123"
+#	RecipientChatID "-1424242424242"
 #</Plugin>
 
 #<Plugin ntpd>

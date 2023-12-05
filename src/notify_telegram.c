@@ -32,9 +32,11 @@
 #include <curl/curl.h>
 #include <yajl/yajl_parse.h>
 
-#define MAXSTRING 1024
+#define MAX_BUF_SIZE 1024
+#define MAX_URL_SIZE 128
+#define MAX_PARAMS_SIZE 2048
 
-static const char *config_keys[] = {"BotToken", "Recipient"};
+static const char *config_keys[] = {"BotToken", "RecipientChatID"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
 static char *bot_token;
@@ -45,6 +47,9 @@ static pthread_mutex_t telegram_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int notify_telegram_init(void) {
     curl_global_init(CURL_GLOBAL_SSL);
+
+    // TODO
+
     return 0;
 }
 
@@ -54,7 +59,7 @@ static int notify_telegram_shutdown(void) {
 }
 
 static int notify_telegram_config(const char *key, const char *value) {
-    if (strcasecmp(key, "Recipient") == 0) {
+    if (strcasecmp(key, "RecipientChatID") == 0) {
         char **tmp;
         tmp = realloc(recipients, (recipients_len + 1) * sizeof(char *));
         if (tmp == NULL) {
@@ -83,13 +88,13 @@ static int notify_telegram_config(const char *key, const char *value) {
 }
 
 static int notify_telegram_notification(const notification_t *n, user_data_t __attribute__((unused)) * user_data) {
-    char buf[MAXSTRING] = "";
+    char buf[MAX_BUF_SIZE] = "";
     char *buf_ptr = buf;
     int buf_len = sizeof(buf);
     int status;
 
     status = snprintf(
-        buf_ptr, buf_len, "Notification: severity = %s",
+        buf_ptr, buf_len, "<b>Notification:</b>\nseverity = %s",
         (n->severity == NOTIF_FAILURE)
             ? "FAILURE"
             : ((n->severity == NOTIF_WARNING)
@@ -105,7 +110,7 @@ static int notify_telegram_notification(const notification_t *n, user_data_t __a
 
 #define APPEND(bufptr, buflen, key, value)                                     \
     if ((buflen > 0) && (strlen(value) > 0)) {                                 \
-        status = snprintf(bufptr, buflen, ", %s = %s", key, value);            \
+        status = snprintf(bufptr, buflen, ",\n%s = %s", key, value);            \
         if (status > 0) {                                                      \
             bufptr += status;                                                  \
             buflen -= status;                                                  \
@@ -125,15 +130,17 @@ static int notify_telegram_notification(const notification_t *n, user_data_t __a
     fprintf(stdout, "%s\n", buf);
     fflush(stdout);
 
-    CURL *handle = curl_easy_init();
-    char params[MAXSTRING * 2] = "";
-    char url[MAXSTRING] = "";
-    snprintf(params, MAXSTRING * 2, "chat_id=123123123&text=%s", buf);
-    snprintf(url, MAXSTRING, "https://api.telegram.org/bot%s/sendMessage", bot_token);
-    curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
-    curl_easy_setopt(handle, CURLOPT_URL, url);
-    curl_easy_perform(handle);
-    curl_easy_cleanup(handle);
+    char url[MAX_URL_SIZE] = "";
+    snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
+    char params[MAX_PARAMS_SIZE] = "";
+    for (int i=0; i<recipients_len; ++i) {
+        snprintf(params, MAX_PARAMS_SIZE, "parse_mode=HTML&chat_id=%s&text=%s", recipients[i], buf);
+        CURL *handle = curl_easy_init();
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
+        curl_easy_setopt(handle, CURLOPT_URL, url);
+        curl_easy_perform(handle);
+        curl_easy_cleanup(handle);
+    }
 
     pthread_mutex_unlock(&telegram_lock);
 

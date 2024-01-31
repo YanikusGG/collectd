@@ -1268,6 +1268,7 @@
 
 #<Plugin notify_telegram>
 #	BotToken "telegram-bot-token"
+#	ProxyURL "https://api.telegram.org/bot"
 #	RecipientChatID "123123123"
 #	RecipientChatID "-1424242424242"
 #</Plugin>

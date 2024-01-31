@@ -71,10 +71,11 @@ typedef size_t yajl_len_t;
 typedef unsigned int yajl_len_t;
 #endif
 
-static const char *config_keys[] = {"BotToken", "RecipientChatID"};
+static const char *config_keys[] = {"BotToken", "ProxyURL", "RecipientChatID"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
 static char *bot_token;
+static char *proxy_url;
 static char **recipients;
 static int recipients_len;
 
@@ -94,6 +95,13 @@ static size_t tg_curl_write_callback(void *data, size_t size, size_t nmemb, void
     memcpy(&(buf->response[buf->size]), data, realsize);
     buf->size += realsize;
     buf->response[buf->size] = 0;
+
+    return realsize;
+}
+
+static size_t tg_curl_empty_callback(void *data, size_t size, size_t nmemb, void *user_data)
+{
+    size_t realsize = size * nmemb;
 
     return realsize;
 }
@@ -210,7 +218,11 @@ static int notify_telegram_init(void) {
 
     struct response_buffer_t buf = {0};
     char url[MAX_URL_SIZE] = "";
-    snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/getUpdates", bot_token);
+    if (proxy_url) {
+        snprintf(url, MAX_URL_SIZE, "%s%s/getUpdates", proxy_url, bot_token);
+    } else {
+        snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/getUpdates", bot_token);
+    }
     char params[MAX_PARAMS_SIZE] = "";
     snprintf(params, MAX_PARAMS_SIZE, "limit=%d&allowed_updates=[\"message\"]", MAX_INPUT_MESSAGES_COUNT);
     CURL *handle = curl_easy_init();
@@ -273,13 +285,22 @@ static int notify_telegram_init(void) {
             "```\n"
             "<Plugin notify_telegram>\n"
             "    BotToken \"telegram-bot-token\"\n"
+            "    ProxyURL \"https://api\\.telegram\\.org/bot\"\n"
             "    RecipientChatID \"%s\"\n"
             "</Plugin>\n"
-            "```"
+            "```\n"
+            "If you use Local Bot API Server, set `ProxyURL` to your server URL\n"
+            "Read more: https://core\\.telegram\\.org/bots/api\\#using\\-a\\-local\\-bot\\-api\\-server"
         ;
-        snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
+        if (proxy_url) {
+            snprintf(url, MAX_URL_SIZE, "%s%s/sendMessage", proxy_url, bot_token);
+        } else {
+            snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
+        }
         handle = curl_easy_init();
         curl_easy_setopt(handle, CURLOPT_URL, url);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_empty_callback);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, NULL);
         char help_text[MAX_BUF_SIZE] = "";
         for (int i=0; i<parse_context.chat_id_count; ++i) {
             snprintf(help_text, MAX_BUF_SIZE, CONFIG_HELP_TEXT_TEMPLATE, parse_context.chat_id[i]);
@@ -295,12 +316,18 @@ static int notify_telegram_init(void) {
         }
         curl_easy_cleanup(handle);
 
-        snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/getUpdates", bot_token);
+        if (proxy_url) {
+            snprintf(url, MAX_URL_SIZE, "%s%s/getUpdates", proxy_url, bot_token);
+        } else {
+            snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/getUpdates", bot_token);
+        }
         snprintf(params, MAX_PARAMS_SIZE, "offset=%llu", 1ULL + strtoull(parse_context.max_update_id, NULL, 10));
         free_parse_context(&parse_context);
         handle = curl_easy_init();
         curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
         curl_easy_setopt(handle, CURLOPT_URL, url);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_empty_callback);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, NULL);
         response_code = curl_easy_perform(handle);
         curl_easy_cleanup(handle);
         if (response_code != CURLE_OK) {
@@ -338,6 +365,13 @@ static int notify_telegram_config(const char *key, const char *value) {
         sfree(bot_token);
         bot_token = strdup(value);
         if (bot_token == NULL) {
+            ERROR("notify_telegram: strdup failed.");
+            return -1;
+        }
+    } else if (strcasecmp(key, "ProxyURL") == 0) {
+        sfree(proxy_url);
+        proxy_url = strdup(value);
+        if (proxy_url == NULL) {
             ERROR("notify_telegram: strdup failed.");
             return -1;
         }
@@ -389,9 +423,15 @@ static int notify_telegram_notification(const notification_t *n, user_data_t __a
     pthread_mutex_lock(&telegram_lock);
 
     char url[MAX_URL_SIZE] = "";
-    snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
+    if (proxy_url) {
+        snprintf(url, MAX_URL_SIZE, "%s%s/sendMessage", proxy_url, bot_token);
+    } else {
+        snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
+    }
     CURL *handle = curl_easy_init();
     curl_easy_setopt(handle, CURLOPT_URL, url);
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_empty_callback);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, NULL);
     char params[MAX_PARAMS_SIZE] = "";
     for (int i=0; i<recipients_len; ++i) {
         snprintf(params, MAX_PARAMS_SIZE, "parse_mode=HTML&chat_id=%s&text=%s", recipients[i], buf);

@@ -99,13 +99,6 @@ static size_t tg_curl_write_callback(void *data, size_t size, size_t nmemb, void
     return realsize;
 }
 
-static size_t tg_curl_empty_callback(void *data, size_t size, size_t nmemb, void *user_data)
-{
-    size_t realsize = size * nmemb;
-
-    return realsize;
-}
-
 static int tg_parse_bool_callback(void *ctx, int bool_val) {
     struct parse_context_t *parse_context = (struct parse_context_t *)ctx;
     if (parse_context->inside_key_ok) {
@@ -213,9 +206,7 @@ static void free_parse_context(struct parse_context_t *parse_context) {
     }
 }
 
-static int notify_telegram_init(void) {
-    curl_global_init(CURL_GLOBAL_SSL);
-
+static int notify_telegram_read(void) {
     struct response_buffer_t buf = {0};
     char url[MAX_URL_SIZE] = "";
     if (proxy_url) {
@@ -230,8 +221,11 @@ static int notify_telegram_init(void) {
     curl_easy_setopt(handle, CURLOPT_URL, url);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_write_callback);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, (void *)&buf);
+    pthread_mutex_lock(&telegram_lock);
     CURLcode response_code = curl_easy_perform(handle);
+    pthread_mutex_unlock(&telegram_lock);
     curl_easy_cleanup(handle);
+    DEBUG("notify_telegram: curl response = %s", buf.response);
     if (response_code != CURLE_OK) {
         ERROR("notify_telegram: curl_easy_perform failed.");
         sfree(buf.response);
@@ -297,23 +291,29 @@ static int notify_telegram_init(void) {
         } else {
             snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
         }
+        struct response_buffer_t help_response_buf = {0};
         handle = curl_easy_init();
         curl_easy_setopt(handle, CURLOPT_URL, url);
-        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_empty_callback);
-        curl_easy_setopt(handle, CURLOPT_WRITEDATA, NULL);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_write_callback);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, (void *)&help_response_buf);
         char help_text[MAX_BUF_SIZE] = "";
         for (int i=0; i<parse_context.chat_id_count; ++i) {
             snprintf(help_text, MAX_BUF_SIZE, CONFIG_HELP_TEXT_TEMPLATE, parse_context.chat_id[i]);
             snprintf(params, MAX_PARAMS_SIZE, "parse_mode=MarkdownV2&chat_id=%s&text=%s", parse_context.chat_id[i], help_text);
             curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
+            pthread_mutex_lock(&telegram_lock);
             response_code = curl_easy_perform(handle);
+            pthread_mutex_unlock(&telegram_lock);
             if (response_code != CURLE_OK) {
                 ERROR("notify_telegram: curl_easy_perform failed.");
                 curl_easy_cleanup(handle);
                 free_parse_context(&parse_context);
+                sfree(help_response_buf.response);
                 return -1;
             }
         }
+        DEBUG("notify_telegram: curl response = %s", help_response_buf.response);
+        sfree(help_response_buf.response);
         curl_easy_cleanup(handle);
 
         if (proxy_url) {
@@ -323,13 +323,18 @@ static int notify_telegram_init(void) {
         }
         snprintf(params, MAX_PARAMS_SIZE, "offset=%llu", 1ULL + strtoull(parse_context.max_update_id, NULL, 10));
         free_parse_context(&parse_context);
+        struct response_buffer_t update_response_buf = {0};
         handle = curl_easy_init();
         curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
         curl_easy_setopt(handle, CURLOPT_URL, url);
-        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_empty_callback);
-        curl_easy_setopt(handle, CURLOPT_WRITEDATA, NULL);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_write_callback);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, (void *)&update_response_buf);
+        pthread_mutex_lock(&telegram_lock);
         response_code = curl_easy_perform(handle);
+        pthread_mutex_unlock(&telegram_lock);
         curl_easy_cleanup(handle);
+        DEBUG("notify_telegram: curl response = %s", update_response_buf.response);
+        sfree(update_response_buf.response);
         if (response_code != CURLE_OK) {
             ERROR("notify_telegram: curl_easy_perform failed.");
             return -1;
@@ -341,8 +346,15 @@ static int notify_telegram_init(void) {
     return 0;
 }
 
+static int notify_telegram_init(void) {
+    curl_global_init(CURL_GLOBAL_SSL);
+
+    return notify_telegram_read();
+}
+
 static int notify_telegram_shutdown(void) {
     curl_global_cleanup();
+
     return 0;
 }
 
@@ -420,33 +432,34 @@ static int notify_telegram_notification(const notification_t *n, user_data_t __a
 
     buf[sizeof(buf) - 1] = '\0';
 
-    pthread_mutex_lock(&telegram_lock);
-
     char url[MAX_URL_SIZE] = "";
     if (proxy_url) {
         snprintf(url, MAX_URL_SIZE, "%s%s/sendMessage", proxy_url, bot_token);
     } else {
         snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/sendMessage", bot_token);
     }
+    struct response_buffer_t notify_response_buf = {0};
     CURL *handle = curl_easy_init();
     curl_easy_setopt(handle, CURLOPT_URL, url);
-    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_empty_callback);
-    curl_easy_setopt(handle, CURLOPT_WRITEDATA, NULL);
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, tg_curl_write_callback);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, (void *)&notify_response_buf);
     char params[MAX_PARAMS_SIZE] = "";
     for (int i=0; i<recipients_len; ++i) {
         snprintf(params, MAX_PARAMS_SIZE, "parse_mode=HTML&chat_id=%s&text=%s", recipients[i], buf);
         curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
+        pthread_mutex_lock(&telegram_lock);
         CURLcode response_code = curl_easy_perform(handle);
+        pthread_mutex_unlock(&telegram_lock);
         if (response_code != CURLE_OK) {
             ERROR("notify_telegram: curl_easy_perform failed.");
             curl_easy_cleanup(handle);
-            pthread_mutex_unlock(&telegram_lock);
+            sfree(notify_response_buf.response);
             return -1;
         }
     }
+    DEBUG("notify_telegram: curl response = %s", notify_response_buf.response);
+    sfree(notify_response_buf.response);
     curl_easy_cleanup(handle);
-
-    pthread_mutex_unlock(&telegram_lock);
 
     return 0;
 }
@@ -455,5 +468,6 @@ void module_register(void) {
     plugin_register_init("notify_telegram", notify_telegram_init);
     plugin_register_shutdown("notify_telegram", notify_telegram_shutdown);
     plugin_register_config("notify_telegram", notify_telegram_config, config_keys, config_keys_num);
+    plugin_register_read("notify_telegram", notify_telegram_read);
     plugin_register_notification("notify_telegram", notify_telegram_notification, /* user_data = */ NULL);
 }

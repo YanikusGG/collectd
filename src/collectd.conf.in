@@ -1269,6 +1269,9 @@
 #<Plugin notify_telegram>
 #	BotToken "telegram-bot-token"
 #	ProxyURL "https://api.telegram.org/bot"
+#	WebhookURL "https://real.url.com/bot/telegram-bot-token"
+#	WebhookHost "localhost"
+#	WebhookPort "8000"
 #	RecipientChatID "123123123"
 #	RecipientChatID "-1424242424242"
 #</Plugin>

@@ -6985,7 +6985,7 @@ if test "x$with_libcurl" = "xyes" && test "x$with_libxml2" = "xyes"; then
   plugin_curl_xml="yes"
 fi
 
-if test "x$with_libcurl" = "xyes" && test "x$with_libssl" = "xyes" && test "x$with_libyajl" = "xyes"; then
+if test "x$with_libcurl" = "xyes" && test "x$with_libssl" = "xyes" && test "x$with_libyajl" = "xyes" && test "x$with_libmicrohttpd" = "xyes"; then
   plugin_notify_telegram="yes"
 fi
 

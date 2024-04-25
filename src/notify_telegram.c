@@ -82,16 +82,41 @@ typedef size_t yajl_len_t;
 typedef unsigned int yajl_len_t;
 #endif
 
-static const char *config_keys[] = {"BotToken", "ProxyURL", "WebhookURL", "WebhookHost", "WebhookPort", "RecipientChatID"};
+static const char *config_keys[] = {
+    "BotToken",
+    "ProxyURL",
+    "DisableGettingUpdates",
+    "WebhookURL",
+    "WebhookHost",
+    "WebhookPort",
+    "MHDDaemonHost",
+    "MHDDaemonPort",
+    "RecipientChatID"
+};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
 static char *bot_token;
 static char *proxy_url;
+static bool disable_getting_updates = false;
 static char *webhook_url;
 static char *webhook_host;
-static unsigned short webhook_port;
+static char * webhook_port;
+static char *mhd_daemon_host;
+static unsigned short mhd_daemon_port;
 static char **recipients;
 static int recipients_len;
+
+const char *CONFIG_HELP_TEXT_TEMPLATE =
+    "Here is the collectd configuration with your chat id:\n"
+    "```\n"
+    "<Plugin notify_telegram>\n"
+    "    BotToken \"telegram-bot-token\"\n"
+    "    RecipientChatID \"%s\"\n"
+    "</Plugin>\n"
+    "```\n"
+    "If you want to use Local Bot API Server, specify `ProxyURL`\n"
+    "If you want to use webhooks instead of long polling, specify `WebhookURL`, `WebhookHost` and `WebhookPort`"
+;
 
 static pthread_mutex_t telegram_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -223,7 +248,7 @@ static void free_parse_context(struct parse_context_t *parse_context) {
 }
 
 static int notify_telegram_read(void) {
-    if (webhook_url || webhook_host || webhook_port) {
+    if (disable_getting_updates || webhook_host) {
         return 0;
     }
 
@@ -294,17 +319,6 @@ static int notify_telegram_read(void) {
     }
 
     if (parse_context.chat_id_count > 0 && parse_context.max_update_id != NULL) {
-        const char *CONFIG_HELP_TEXT_TEMPLATE =
-            "Here is the collectd configuration with your chat id:\n"
-            "```\n"
-            "<Plugin notify_telegram>\n"
-            "    BotToken \"telegram-bot-token\"\n"
-            "    RecipientChatID \"%s\"\n"
-            "</Plugin>\n"
-            "```\n"
-            "If you want to use Local Bot API Server, specify `ProxyURL`\n"
-            "If you want to use webhooks instead of long polling, specify `WebhookURL`, `WebhookHost` and `WebhookPort`"
-        ;
         if (proxy_url) {
             snprintf(url, MAX_URL_SIZE, "%s%s/sendMessage", proxy_url, bot_token);
         } else {
@@ -378,6 +392,9 @@ static MHD_RESULT telegram_mhd_handler(void *cls,
     if (strcmp(method, MHD_HTTP_METHOD_POST) != 0) {
         return MHD_NO;
     }
+    if (webhook_url && strcmp(url, webhook_url) != 0) {
+        return MHD_NO;
+    }
 
     static struct response_buffer_t buf;
     if (*connection_state == NULL) {
@@ -441,18 +458,6 @@ static MHD_RESULT telegram_mhd_handler(void *cls,
     }
 
     if (parse_context.chat_id_count > 0 && parse_context.max_update_id != NULL) {
-        const char *CONFIG_HELP_TEXT_TEMPLATE =
-            "Here is the collectd configuration with your chat id:\n"
-            "```\n"
-            "<Plugin notify_telegram>\n"
-            "    BotToken \"telegram-bot-token\"\n"
-            "    ProxyURL \"https://api\\.telegram\\.org/bot\"\n"
-            "    RecipientChatID \"%s\"\n"
-            "</Plugin>\n"
-            "```\n"
-            "If you want to use Local Bot API Server, specify `ProxyURL`\n"
-            "If you want to use webhooks instead of long polling, specify `WebhookURL`, `WebhookHost` and `WebhookPort`"
-        ;
         char url[MAX_URL_SIZE] = "";
         if (proxy_url) {
             snprintf(url, MAX_URL_SIZE, "%s%s/sendMessage", proxy_url, bot_token);
@@ -510,10 +515,10 @@ static void telegram_mhd_logger(__attribute__((unused)) void *arg, char const *f
 static int telegram_open_socket(int addrfamily) {
   /* {{{ */
     char service[NI_MAXSERV];
-    ssnprintf(service, sizeof(service), "%hu", webhook_port);
+    ssnprintf(service, sizeof(service), "%hu", mhd_daemon_port);
 
     struct addrinfo *res;
-    int status = getaddrinfo(webhook_host, service,
+    int status = getaddrinfo(mhd_daemon_host, service,
                            &(struct addrinfo){
                                .ai_flags = AI_PASSIVE,
                                .ai_family = addrfamily,
@@ -575,7 +580,7 @@ static struct MHD_Daemon *telegram_start_daemon() {
     int fd = telegram_open_socket(PF_INET);
     if (fd == -1) {
         ERROR("notify_telegram: Opening a listening socket for [%s]:%hu failed.",
-            (webhook_host != NULL) ? webhook_host : "::", webhook_port);
+            (mhd_daemon_host != NULL) ? mhd_daemon_host : "::", mhd_daemon_port);
         return NULL;
     }
 
@@ -585,7 +590,7 @@ static struct MHD_Daemon *telegram_start_daemon() {
 #endif
 
     struct MHD_Daemon *d = MHD_start_daemon(
-        flags, webhook_port,
+        flags, mhd_daemon_port,
         /* MHD_AcceptPolicyCallback = */ NULL,
         /* MHD_AcceptPolicyCallback arg = */ NULL, telegram_mhd_handler, NULL,
         MHD_OPTION_LISTEN_SOCKET, fd, MHD_OPTION_EXTERNAL_LOGGER, telegram_mhd_logger,
@@ -602,7 +607,7 @@ static struct MHD_Daemon *telegram_start_daemon() {
 static struct MHD_Daemon *telegram_start_daemon() {
     /* {{{ */
     struct MHD_Daemon *d = MHD_start_daemon(
-        MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, webhook_port,
+        MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, mhd_daemon_port,
         /* MHD_AcceptPolicyCallback = */ NULL,
         /* MHD_AcceptPolicyCallback arg = */ NULL, telegram_mhd_handler, NULL,
         MHD_OPTION_EXTERNAL_LOGGER, telegram_mhd_logger, NULL, MHD_OPTION_END);
@@ -618,7 +623,11 @@ static struct MHD_Daemon *telegram_start_daemon() {
 static int notify_telegram_init(void) {
     curl_global_init(CURL_GLOBAL_SSL);
 
-    if (webhook_url && webhook_host && webhook_port && !httpd) {
+    if (disable_getting_updates) {
+        return 0;
+    }
+
+    if (webhook_host && !httpd) {
         httpd = telegram_start_daemon();
         if (!httpd) {
             ERROR("notify_telegram: start daemon failed.");
@@ -634,7 +643,14 @@ static int notify_telegram_init(void) {
             snprintf(url, MAX_URL_SIZE, "https://api.telegram.org/bot%s/setWebhook", bot_token);
         }
         char params[MAX_PARAMS_SIZE] = "";
-        snprintf(params, MAX_PARAMS_SIZE, "url=%s&allowed_updates=[\"message\"]", webhook_url);
+        snprintf(params, MAX_PARAMS_SIZE, "url=%s", webhook_host);
+        if (webhook_port) {
+            snprintf(params, MAX_PARAMS_SIZE, "%s", webhook_port);
+        }
+        if (webhook_url) {
+            snprintf(params, MAX_PARAMS_SIZE, "%s", webhook_url);
+        }
+        snprintf(params, MAX_PARAMS_SIZE, "&allowed_updates=[\"message\"]", webhook_url);
         CURL *handle = curl_easy_init();
         curl_easy_setopt(handle, CURLOPT_POSTFIELDS, params);
         curl_easy_setopt(handle, CURLOPT_URL, url);
@@ -650,7 +666,7 @@ static int notify_telegram_init(void) {
             sfree(buf.response);
             return -1;
         }
-    } else {
+    } else if (!webhook_host) {
         DEBUG("notify_telegram: long polling started");
 
         struct response_buffer_t buf = {0};
@@ -721,6 +737,8 @@ static int notify_telegram_config(const char *key, const char *value) {
             ERROR("notify_telegram: strdup failed.");
             return -1;
         }
+    } else if (strcasecmp(key, "DisableGettingUpdates") == 0) {
+        disable_getting_updates = IS_TRUE(value);
     } else if (strcasecmp(key, "WebhookURL") == 0) {
         sfree(webhook_url);
         webhook_url = strdup(value);
@@ -729,26 +747,40 @@ static int notify_telegram_config(const char *key, const char *value) {
             return -1;
         }
     } else if (strcasecmp(key, "WebhookHost") == 0) {
-#if MHD_VERSION >= 0x00090000
         sfree(webhook_host);
         webhook_host = strdup(value);
         if (webhook_host == NULL) {
             ERROR("notify_telegram: strdup failed.");
             return -1;
         }
+    } else if (strcasecmp(key, "WebhookPort") == 0) {
+        sfree(webhook_port);
+        webhook_port = strdup(value);
+        if (webhook_port == NULL) {
+            ERROR("notify_telegram: strdup failed.");
+            return -1;
+        }
+    } else if (strcasecmp(key, "MHDDaemonHost") == 0) {
+#if MHD_VERSION >= 0x00090000
+        sfree(mhd_daemon_host);
+        mhd_daemon_host = strdup(value);
+        if (mhd_daemon_host == NULL) {
+            ERROR("notify_telegram: strdup failed.");
+            return -1;
+        }
 #else
-        ERROR("notify_telegram: Option `WebhookHost' not supported. Please upgrade libmicrohttpd to at least 0.9.0");
+        ERROR("notify_telegram: Option `MHDDaemonHost' not supported. Please upgrade libmicrohttpd to at least 0.9.0");
         return -1;
 #endif
-    } else if (strcasecmp(key, "WebhookPort") == 0) {
+    } else if (strcasecmp(key, "MHDDaemonPort") == 0) {
         char *endptr;
         errno = 0;
         int tmp = (int)strtol(value, &endptr, /* base = */ 10);
         if (errno != 0 || endptr == value || tmp < 1 || tmp > 65535) {
-            ERROR("notify_telegram: converting WebhookPort failed.");
+            ERROR("notify_telegram: converting MHDDaemonPort failed.");
             return -1;
         }
-        webhook_port = (unsigned short)tmp;
+        mhd_daemon_port = (unsigned short)tmp;
     } else {
         ERROR("notify_telegram: unknown config key.");
         return -1;
